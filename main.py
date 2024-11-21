@@ -8,31 +8,31 @@ from google.cloud import bigquery
 import json
 
 class ControleSanitaire(BaseModel):
-    iea_date_inspection: datetime.date
-    iea_app_code_synthese_eval_sanit: int
+    ea_date_inspection: datetime.date
+    ea_app_code_synthese_eval_sanit: int
 
 class Restaurant(BaseModel):
-    iofff_name: str
-    iofff_meta_geo_point_latitude: float
-    iofff_meta_geo_point_longitude: float
-    iea_app_libelle_etablissement: str
-    iea_date_inspection: datetime.date
-    iea_synthese_eval_sanit: str
-    iea_app_code_synthese_eval_sanit: int
-    iea_full_address: str
-    nb_inspections: int
-    inspections: List[ControleSanitaire]
-    sgmppd_rating: Optional[float]
-    sgmppd_googleMapsUri: Optional[str]
-    sgmppd_userRatingCount: Optional[int]
-    stld_web_url: Optional[str]
-    stld_rating: Optional[float]
-    stld_num_reviews: Optional[int]
+    osm_ffs_name: str
+    osm_ffs_meta_geo_point_latitude: float
+    osm_ffs_meta_geo_point_longitude: float
+    ea_app_libelle_etablissement: str
+    ea_date_inspection: datetime.date
+    ea_synthese_eval_sanit: str
+    ea_app_code_synthese_eval_sanit: int
+    ea_full_address: str
+    nombre_controles_sanitaires: int
+    controles_sanitaires: List[ControleSanitaire]
+    gmp_pd_rating: Optional[float]
+    gmp_pd_googleMapsUri: Optional[str]
+    gmp_pd_userRatingCount: Optional[int]
+    t_ld_web_url: Optional[str]
+    t_ld_rating: Optional[float]
+    t_ld_num_reviews: Optional[int]
 
 class Restaurants(BaseModel):
     restaurants: List[Restaurant]
 
-class BoundingBox(BaseModel):
+class BoiteEnglobante(BaseModel):
     latitude_minimum: float
     longitude_minimum: float
     latitude_maximum: float
@@ -53,7 +53,7 @@ app.add_middleware(
 )
 
 @app.post("/get_restaurants", response_model = Restaurants)
-def get_restaurants(bounding_box: BoundingBox) -> Restaurants:
+def get_restaurants(boite_englobante: BoiteEnglobante) -> Restaurants:
     client = bigquery.Client.from_service_account_json(os.getenv("GCP_SERVICE_ACCOUNT_KEY_JSON_FILEPATH"))
 
     QUERY = (
@@ -61,34 +61,36 @@ def get_restaurants(bounding_box: BoundingBox) -> Restaurants:
         '* '
         'FROM `' + os.getenv("GCP_PROJECT_ID") + '.' + os.getenv("BQ_DATASET_ID") + '.' + os.getenv("BQ_TABLE_ID") + '` '
         'WHERE '
-        'iofff_meta_geo_point_latitude BETWEEN ' + str(bounding_box.latitude_minimum) + ' AND ' + str(bounding_box.latitude_maximum) + ' '
+        '`osm_ffs-meta_geo_point_latitude` BETWEEN ' + str(boite_englobante.latitude_minimum) + ' AND ' + str(boite_englobante.latitude_maximum) + ' '
         'AND '
-        'iofff_meta_geo_point_longitude BETWEEN ' + str(bounding_box.longitude_minimum) + ' AND ' + str(bounding_box.longitude_maximum)
+        '`osm_ffs-meta_geo_point_longitude` BETWEEN ' + str(boite_englobante.longitude_minimum) + ' AND ' + str(boite_englobante.longitude_maximum)
     )
     query_job = client.query(QUERY)
     rows = query_job.result()
     restaurants = []
     for row in rows:
-        inspections = []
-        for inspection_str in row["inspections"]:
-            inspection_dict = json.loads(inspection_str)
-            inspections.append(inspection_dict)
+        controles_sanitaires = []
+        for controle_sanitaire in row["controles_sanitaires"]:
+            controles_sanitaires.append({
+                'ea_date_inspection': controle_sanitaire["ea-date_inspection"],
+                'ea_app_code_synthese_eval_sanit': controle_sanitaire["ea-app_code_synthese_eval_sanit"]
+            })
         restaurants.append({
-            'iofff_name': row["iofff_name"],
-            'iofff_meta_geo_point_latitude': row["iofff_meta_geo_point_latitude"],
-            'iofff_meta_geo_point_longitude': row["iofff_meta_geo_point_longitude"],
-            'iea_app_libelle_etablissement': row["iea_app_libelle_etablissement"],
-            'iea_date_inspection': row["iea_date_inspection"],
-            'iea_synthese_eval_sanit': row["iea_synthese_eval_sanit"],
-            'iea_app_code_synthese_eval_sanit': row["iea_app_code_synthese_eval_sanit"],
-            'iea_full_address': row["iea_full_address"],
-            'nb_inspections': row["nb_inspections"],
-            'inspections': inspections,
-            'sgmppd_rating': row["sgmppd_rating"],
-            'sgmppd_googleMapsUri': row["sgmppd_googleMapsUri"],
-            'sgmppd_userRatingCount': row["sgmppd_userRatingCount"],
-            'stld_web_url': row["stld_web_url"],
-            'stld_rating': row["stld_rating"],
-            'stld_num_reviews': row["stld_num_reviews"]
+            'osm_ffs_name': row["osm_ffs-name"],
+            'osm_ffs_meta_geo_point_latitude': row["osm_ffs-meta_geo_point_latitude"],
+            'osm_ffs_meta_geo_point_longitude': row["osm_ffs-meta_geo_point_longitude"],
+            'ea_app_libelle_etablissement': row["ea-app_libelle_etablissement"],
+            'ea_date_inspection': row["ea-date_inspection"],
+            'ea_synthese_eval_sanit': row["ea-synthese_eval_sanit"],
+            'ea_app_code_synthese_eval_sanit': row["ea-app_code_synthese_eval_sanit"],
+            'ea_full_address': row["ea-full_address"],
+            'nombre_controles_sanitaires': row["nombre_controles_sanitaires"],
+            'controles_sanitaires': controles_sanitaires,
+            'gmp_pd_rating': row["gmp_pd-rating"],
+            'gmp_pd_googleMapsUri': row["gmp_pd-googleMapsUri"],
+            'gmp_pd_userRatingCount': row["gmp_pd-userRatingCount"],
+            't_ld_web_url': row["t_ld-web_url"],
+            't_ld_rating': row["t_ld-rating"],
+            't_ld_num_reviews': row["t_ld-num_reviews"]
         })
     return Restaurants(restaurants = restaurants)
