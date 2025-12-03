@@ -8,8 +8,8 @@
 #              data loading. Ongoing data updates handled by data-pipeline project.
 #
 # Author:      Jonathan About
-# Version:     0.0.1
-# Date:        2025-10-20
+# Version:     0.0.2
+# Date:        2025-12-03
 # Shell:       Bash 4.0+ (uses associative arrays and modern bash features)
 # POSIX:       Partially compliant (uses bash-specific features for robustness)
 #
@@ -20,11 +20,15 @@
 #   capabilities for production-grade reliability. Data updates are handled
 #   separately by the data-pipeline project using Apache Airflow.
 #
+#   Supports both hosted Supabase (via --linked) and self-hosted instances
+#   (via --db-url). The script auto-detects the deployment type.
+#
 # Components Initialized:
 #   1. Storage: Supabase Storage bucket for data lake operations
-#   2. Database: All schemas and tables via migrations:
+#   2. Database: All schemas, tables, and extensions via migrations:
 #      - Medallion architecture schemas (bronze, silver, gold)
 #      - API response tables (Google Places, Tripadvisor)
+#      - PostgreSQL extensions (PostGIS, fuzzystrmatch) and GeoHash functions
 #   3. OSM Data: Initial OpenStreetMap France food service dataset
 #   4. Alim'confiance: Initial government food safety inspection data
 #
@@ -56,7 +60,9 @@
 #
 # Rollback Procedure:
 #   To rollback a failed initialization:
-#   1. Run: supabase db reset --linked
+#   1. Reset database:
+#      - Hosted Supabase: supabase db reset --linked
+#      - Self-hosted: supabase db reset --db-url "postgres://$SUPABASE_DB_URI" --debug
 #   2. Delete bucket: supabase storage delete data_lake
 #   3. Remove .env file and reconfigure
 #   4. Re-run this script after fixing issues
@@ -465,15 +471,20 @@ apply_migrations() {
 
     # Apply migrations to the database using db reset
     # This command executes SQL files in supabase/migrations/ directory
-    log_info "Applying migrations to database (schemas and tables)..."
-    if ! supabase db reset --linked; then
-        log_error "Failed to apply migrations"
-        exit ${EXIT_MIGRATION_ERROR}
+    # Try --linked first (hosted Supabase), fallback to --db-url (self-hosted)
+    log_info "Applying migrations to database (schemas, tables, and extensions)..."
+    if ! supabase db reset --linked 2>/dev/null; then
+        log_warn "Linked reset not available. Using --db-url for self-hosted Supabase..."
+        if ! supabase db reset --db-url "postgres://${SUPABASE_DB_URI}" --debug; then
+            log_error "Failed to apply migrations"
+            exit ${EXIT_MIGRATION_ERROR}
+        fi
     fi
 
     log_info "✓ All migrations applied successfully"
     log_info "  Created schemas: bronze, silver, gold"
-    log_info "  Created tables: google_places, tripadvisor_location_search, tripadvisor_location_details"
+    log_info "  Created tables: google_places, tripadvisor_location_details"
+    log_info "  Enabled extensions: PostGIS, fuzzystrmatch, geohash functions"
 }
 
 # Task 3: Download and import initial OpenStreetMap data
@@ -561,16 +572,12 @@ main() {
     echo "=========================================="
     echo "Duration: ${duration} seconds"
     echo ""
-    echo "Next steps:"
-    echo "  1. Verify the setup by checking Supabase Studio"
-    echo "  2. Test the data by running queries in the SQL Editor"
-    echo "  3. Start building your application!"
-    echo ""
     echo "Resources created:"
     echo "  - Storage bucket: data_lake"
     echo "  - Database schemas: bronze, silver, gold"
     echo "  - Data tables: bronze.osm_france_food_service, bronze.export_alimconfiance"
     echo "  - API response tables: bronze.google_places, bronze.tripadvisor_location_details"
+    echo "  - Database extensions: PostGIS, fuzzystrmatch, geohash functions"
     echo ""
 
     return ${EXIT_SUCCESS}
@@ -592,9 +599,10 @@ Initialize the SûrEtBon backend infrastructure on Supabase.
 This script performs the following one-time initialization operations:
   1. Validates environment configuration
   2. Creates/configures data_lake storage bucket
-  3. Applies database migrations (schemas and tables):
+  3. Applies database migrations (schemas, tables, and extensions):
      - Medallion architecture: bronze, silver, gold schemas
      - API response tables: Google Places, Tripadvisor Location Search/Details
+     - PostgreSQL extensions: PostGIS, fuzzystrmatch, GeoHash functions
   4. Imports initial OpenStreetMap France food service data
   5. Imports initial Alim'confiance dataset (snapshot: 2025-05-06)
 

@@ -15,8 +15,7 @@ This backend project provides **one-time initialization scripts** to set up the 
 
 - [Architecture Overview](#architecture-overview)
 - [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [Detailed Setup](#detailed-setup)
+- [Setup](#setup)
 - [Project Structure](#project-structure)
 - [Data Architecture](#data-architecture)
 
@@ -68,6 +67,16 @@ The system implements a three-layer medallion architecture for progressive data 
 - **Bronze Layer**: Raw data ingestion with minimal transformation
 - **Silver Layer**: Cleansed, validated, and standardized data
 - **Gold Layer**: Business-ready aggregations and metrics
+
+### Geospatial Capabilities
+
+The platform includes comprehensive PostGIS support for location-based analysis:
+
+- **PostGIS Core**: 2D/3D geometry and geography types for restaurant locations
+- **Raster Support**: Heatmap generation and density analysis
+- **Advanced 3D**: Complex geometric calculations for urban environments
+- **Topology Management**: Administrative boundaries and inspection zones
+- **Spatial Indexing**: High-performance proximity searches and geographic queries
 
 ## Prerequisites
 
@@ -131,6 +140,12 @@ Connect your local environment to the cloud project:
 supabase link --project-ref <reference-id>
 ```
 
+### Step 3 (Alternative): Self-Hosted Supabase Setup
+
+For self-hosted Supabase instances, the `supabase link` command is not available. Skip Step 3 and proceed directly to Step 4.
+
+The initialization script auto-detects self-hosted deployments and uses `--db-url` instead of `--linked` for database migrations. Ensure `SUPABASE_DB_URI` is correctly configured in your `.env` file.
+
 ### Step 4: Configure Environment Variables
 
 1. **Copy template:**
@@ -173,6 +188,42 @@ Expected runtime: 5-10 minutes
 
 **Note:** This is a one-time initialization. Subsequent data updates will be handled by the data-pipeline project.
 
+### Applying New Migrations (Post-Initialization)
+
+For users who have already initialized the backend and need to apply new migrations:
+
+#### Supabase cloud
+
+Push pending migrations to your linked project:
+
+```bash
+supabase db push --linked
+```
+
+This applies all migrations in `supabase/migrations/` that haven't been executed yet.
+
+#### Self-Hosted Supabase
+
+Push pending migrations using the database URL:
+
+```bash
+supabase db push --db-url "postgres://$SUPABASE_DB_URI"
+```
+
+Ensure `SUPABASE_DB_URI` is configured in your `.env` file.
+
+#### Verifying Migration Status
+
+Check which migrations have been applied:
+
+```bash
+# Hosted Supabase
+supabase migration list --linked
+
+# Self-hosted Supabase
+supabase migration list --db-url "postgres://$SUPABASE_DB_URI"
+```
+
 ## Project Structure
 
 ```
@@ -187,7 +238,8 @@ backend/
 │   ├── config.toml                                                            # Service configuration
 │   ├── migrations/                                                            # Database migrations
 │   │   ├── 20251008212033_create_medallion_architecture.sql                   # Schemas: bronze, silver, gold
-│   │   └── 20251008230529_create_restaurant_ratings_enrichment_tables.sql     # API response tables
+│   │   ├── 20251008230529_create_restaurant_ratings_enrichment_tables.sql     # API response tables
+│   │   └── 20251025000000_enable_database_extensions.sql                      # PostGIS and fuzzystrmatch extensions
 │   └── functions/                                                             # Edge Functions (future)
 │
 ├── logs/                                                                      # Execution logs (gitignored)
@@ -211,6 +263,20 @@ backend/
 - **Organization:** Date-partitioned folders
 
 ### Database Schemas
+
+#### Extensions Schema (PostgreSQL Extensions)
+
+| Extension                 | Schema       | Description                                     | Use Case                                              |
+|---------------------------|--------------|-------------------------------------------------|-------------------------------------------------------|
+| `postgis`                 | `extensions` | Core geospatial types and functions             | Restaurant proximity searches, coordinate transforms  |
+| `postgis_raster`          | `extensions` | Raster data support                             | Heatmaps, density analysis, coverage visualization    |
+| `postgis_sfcgal`          | `extensions` | Advanced 3D geometry operations                 | Complex spatial calculations, building-level analysis |
+| `postgis_topology`        | `topology`   | Spatial topology management                     | Administrative boundaries, inspection zone management |
+| `fuzzystrmatch`           | `extensions` | Fuzzy string matching functions                 | Restaurant name matching, typo tolerance              |
+| `geohash_adjacent`        | `extensions` | Compute adjacent GeoHash cell in a direction    | Spatial neighbor computation, boundary handling       |
+| `geohash_neighbors`       | `extensions` | Get 9-cell array (center + 8 neighbors)         | Spatial batch processing, boundary coverage           |
+
+**Spatial Reference Systems:** WGS84 (4326), Web Mercator (3857), Lambert-93 (2154)
 
 #### Bronze Schema (Raw Data)
 
@@ -253,6 +319,6 @@ Populated by the data-pipeline project using DBT transformations. Contains the f
 
 ---
 
-**Version:** 0.0.1
-**Last Updated:** 2025-10-20
+**Version:** 0.0.2
+**Last Updated:** 2025-12-03
 **Maintainers:** Jonathan About
