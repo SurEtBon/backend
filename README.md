@@ -283,7 +283,7 @@ backend/
 | Table                          | Description                     | Initial Data                           | Row Count |
 |--------------------------------|---------------------------------|----------------------------------------|-----------|
 | `osm_france_food_service`      | OpenStreetMap restaurants       | Latest snapshot at initialization      | ~165K     |
-| `export_alimconfiance`         | Health inspections              | Static snapshot (2025-05-06)           | ~80K      |
+| `export_alimconfiance`         | Health inspections              | Latest available (daily refresh)       | ~80K      |
 | `google_places`                | Google Maps restaurant ratings  | Populated by data-pipeline via Airflow | Variable* |
 | `tripadvisor_location_details` | Tripadvisor restaurant ratings  | Populated by data-pipeline via Airflow | Variable* |
 
@@ -310,15 +310,15 @@ Populated by the data-pipeline project using DBT transformations. Contains the f
 
 #### Alim'confiance
 
-- **Provider:** Ministry of Agriculture
+- **Provider:** Ministry of Agriculture (via OpenDataSoft DGAL)
 - **Coverage:** All French food establishments
-- **Initial Load:** 2025-05-06 snapshot (API under maintenance)
+- **Initial Load:** Latest available snapshot at initialization
 - **Format:** Parquet
 - **License:** Open License 2.0
-- **Note:** Updates will resume via data-pipeline when API restored
+- **Note:** Data refreshed daily. Regular updates handled by data-pipeline project
 
 ---
 
-**Version:** 0.0.2
-**Last Updated:** 2025-12-03
+**Version:** 0.0.3
+**Last Updated:** 2025-12-09
 **Maintainers:** Jonathan About

@@ -16,19 +16,23 @@
 
 This module handles the initial data load for French food safety inspection data
 from the Alim'confiance platform (managed by the Ministry of Agriculture) during
-backend initialization. It downloads a fixed snapshot of inspection results,
+backend initialization. It downloads the current snapshot of inspection results,
 stores it in Supabase Storage, and populates a database table in the bronze layer.
 
-This is a one-time initialization script using a temporary snapshot approach due
-to ongoing maintenance of the official API. Ongoing data updates will be handled
-by the data-pipeline project using Apache Airflow once the API is restored.
+This is a one-time initialization script. Ongoing data updates are handled by
+the separate data-pipeline project using Apache Airflow.
+
+The script follows a three-phase approach:
+1. Download: Fetch current Alim'confiance dataset from OpenDataSoft
+2. Storage: Upload Parquet file to Supabase Storage
+3. Database: Load data into PostgreSQL table
 
 Key Features:
-    - Fixed snapshot for initialization (dated 2025-05-06)
-    - Idempotent operations for safe re-initialization
-    - Progress tracking for file downloads
-    - Automatic column name sanitization
-    - Comprehensive error handling and recovery
+    - Downloads latest available snapshot at initialization time
+    - Idempotent operations supporting re-initialization
+    - Progress tracking for large file downloads
+    - Automatic cleanup of temporary files
+    - Error recovery and detailed logging
 
 Usage:
     python3 download_alimconfiance_data.py
@@ -42,11 +46,11 @@ Environment Variables:
     SUPABASE_DB_URI (required): PostgreSQL connection string (user:pass@host:port/db)
 
 Data Source:
-    Platform: data.gouv.fr (French Open Data Portal)
-    Dataset: Export Alim'confiance
+    Default: OpenDataSoft DGAL API (https://dgal.opendatasoft.com)
+    Dataset: export_alimconfiance
     Format: Apache Parquet
-    Initial Load: Static snapshot (2025-05-06) during API maintenance
-    Coverage: All French food establishments with health inspections
+    Initial Load: Latest available snapshot
+    Geographic Coverage: France (metropolitan and overseas)
 
 Exit Codes:
     0: Success - Data downloaded and imported successfully
@@ -72,21 +76,20 @@ Example:
     Alim'confiance Data Import
     ============================================================
     Loading environment configuration...
-    Downloading Alim'confiance temporary dataset...
-    Dataset date: 2025-05-06 (fixed snapshot during maintenance)
-    Source URL: https://object.files.data.gouv.fr/hydra-parquet/hydra-parquet/fdfabe62-a581-41a1-998f-73fc53da3398.parquet
-    Progress: 100.0% (5,870,183 / 5,870,183 bytes)
-    ✓ Downloaded 5,870,183 bytes to /tmp/export_alimconfiance-2025-05-06.parquet
+    Downloading Alim'confiance dataset (dated: 2025-12-09)...
+    Source URL: https://dgal.opendatasoft.com/api/explore/v2.1/catalog/datasets/export_alimconfiance/exports/parquet?lang=fr&timezone=Europe%2FBerlin
+    ✓ Downloaded 6,117,695 bytes to /tmp/export_alimconfiance-2025-12-09.parquet
     ...
 
 Author: Jonathan About
-Version: 0.0.1
+Version: 0.0.2
 Since: 2025-10-20
 """
 
 import os
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -98,15 +101,16 @@ from supabase import create_client, Client
 
 
 # Configuration constants
-DATASET_URL: str = "https://object.files.data.gouv.fr/hydra-parquet/hydra-parquet/fdfabe62-a581-41a1-998f-73fc53da3398.parquet"
-DATASET_DATE: str = "2025-05-06"  # Snapshot date for current static file
-PARQUET_FILENAME: str = f"export_alimconfiance-{DATASET_DATE}.parquet"
+DATASET_URL: str = (
+    'https://dgal.opendatasoft.com/api/explore/v2.1/catalog/datasets/'
+    'export_alimconfiance/exports/parquet?lang=fr&timezone=Europe%2FBerlin'
+)
 BUCKET_NAME: str = 'data_lake'
 BRONZE_SCHEMA: str = 'bronze'
 TABLE_NAME: str = 'export_alimconfiance'
 CHUNK_SIZE: int = 8192  # Download chunk size in bytes
 DB_CHUNK_SIZE: int = 1000  # Database insert chunk size
-REQUEST_TIMEOUT: int = 300  # HTTP request timeout in seconds (5 minutes)
+REQUEST_TIMEOUT: int = 600  # HTTP request timeout in seconds
 
 
 def load_environment() -> Dict[str, str]:
@@ -181,57 +185,69 @@ def load_environment() -> Dict[str, str]:
     return env_vars
 
 
+def get_alimconfiance_date() -> str:
+    """Get the current date for the Alim'confiance data snapshot.
+
+    Alim'confiance data on OpenDataSoft is refreshed daily.
+    Returns today's date for file naming and metadata.
+
+    Returns:
+        str: Date string in YYYY-MM-DD format.
+
+    Example:
+        >>> get_alimconfiance_date()
+        '2025-12-09'
+    """
+    return datetime.now().strftime('%Y-%m-%d')
+
+
 def download_alimconfiance_data() -> Optional[str]:
-    """Download Alim'confiance dataset from data.gouv.fr with progress tracking.
+    """Download Alim'confiance dataset from OpenDataSoft API with progress tracking.
 
-    This function handles the download of the Alim'confiance Parquet file from
-    the French Open Data portal for initial backend setup. It implements streaming
-    download with real-time progress indication and validates the downloaded file.
-
-    Currently using a fixed snapshot due to API maintenance. Updates will be
-    handled by the data-pipeline project once the API is restored.
+    This function handles the download of large Parquet files with streaming
+    support and real-time progress indication. It implements robust error
+    handling and validates the downloaded file before returning.
 
     Returns:
         Optional[str]: Path to the downloaded temporary file if successful,
             None if download fails or file is invalid.
 
+    Raises:
+        No exceptions are raised; errors are handled internally and logged.
+
     Side Effects:
         - Creates temporary file in system temp directory
         - Prints download progress to stdout
         - Prints error messages to stderr
-        - Removes invalid files automatically
+        - May leave partial file on disk if interrupted (cleaned up on error)
 
     Example:
         >>> file_path = download_alimconfiance_data()
         >>> if file_path:
         ...     print(f"Downloaded to: {file_path}")
-        '/tmp/export_alimconfiance-2025-05-06.parquet'
 
     Performance Notes:
         - Uses streaming to minimize memory usage
-        - Progress updates every 8KB chunk
-        - Typical download time: 10-20 seconds
-        - File size: ~5-6MB
+        - Chunk size of 8KB balances speed and responsiveness
+        - Progress updates throttled to avoid excessive output
+        - Typical download time: 10-30 seconds on 100Mbps connection
 
-    Data Source Information:
-        - Provider: Ministry of Agriculture and Food Sovereignty
-        - Platform: data.gouv.fr
-        - License: Open License 2.0 (Etalab)
-        - Initial Load: Fixed snapshot (2025-05-06)
-
-    Known Limitations:
-        - Fixed snapshot date during maintenance period
-        - Full dataset download for initialization
-        - No compression beyond Parquet native compression
+    Error Recovery:
+        - HTTP errors trigger immediate failure
+        - Empty files are detected and cleaned up
+        - Partial downloads are removed on failure
+        - Network timeouts set to 10 minutes
     """
-    print(f"Downloading Alim'confiance temporary dataset...")
-    print(f"Dataset date: {DATASET_DATE} (fixed snapshot during maintenance)")
+    alimconfiance_date = get_alimconfiance_date()
+    filename = f"export_alimconfiance-{alimconfiance_date}.parquet"
+
+    print(f"Downloading Alim'confiance dataset (dated: {alimconfiance_date})...")
     print(f"Source URL: {DATASET_URL}")
 
     try:
         # Create temporary file in system temp directory
         temp_dir = tempfile.gettempdir()
-        temp_path = os.path.join(temp_dir, PARQUET_FILENAME)
+        temp_path = os.path.join(temp_dir, filename)
 
         # Initiate streaming download for memory efficiency
         response = requests.get(DATASET_URL, stream=True, timeout=REQUEST_TIMEOUT)
@@ -274,8 +290,8 @@ def download_alimconfiance_data() -> Optional[str]:
         print(f"Error downloading Alim'confiance data: {e}", file=sys.stderr)
         print("Network troubleshooting:", file=sys.stderr)
         print("  1. Check internet connectivity", file=sys.stderr)
-        print("  2. Verify data.gouv.fr is accessible", file=sys.stderr)
-        print("  3. Check if dataset URL has changed", file=sys.stderr)
+        print("  2. Verify the data source URL is accessible", file=sys.stderr)
+        print("  3. Consider retry with increased timeout", file=sys.stderr)
         return None
     except Exception as e:
         print(f"Unexpected error during download: {e}", file=sys.stderr)
@@ -283,11 +299,11 @@ def download_alimconfiance_data() -> Optional[str]:
 
 
 def upload_to_storage(supabase: Client, file_path: str) -> Optional[str]:
-    """Upload Alim'confiance Parquet file to Supabase Storage with versioning.
+    """Upload Parquet file to Supabase Storage bucket with deduplication.
 
-    This function handles the upload of initial inspection data to the data_lake
-    bucket during backend initialization. It implements a replace strategy for the
-    fixed snapshot, ensuring consistency for re-initialization if needed.
+    This function handles the upload of Alim'confiance data files to the data_lake
+    bucket. It implements idempotent operations by removing existing files with the
+    same date before uploading, ensuring consistency across multiple runs.
 
     Args:
         supabase (Client): Authenticated Supabase client with service role
@@ -309,26 +325,28 @@ def upload_to_storage(supabase: Client, file_path: str) -> Optional[str]:
         >>> storage_path = upload_to_storage(client, "/tmp/alimconfiance.parquet")
         >>> if storage_path:
         ...     print(f"Uploaded to: {storage_path}")
-        'export_alimconfiance/2025-05-06.parquet'
+        'export_alimconfiance/2025-12-09.parquet'
 
     Storage Organization:
         Files are organized by date in the following structure:
         data_lake/
         └── export_alimconfiance/
-            ├── 2025-05-06.parquet  (current snapshot)
-            └── [future dated files when API restored]
+            ├── 2025-12-09.parquet
+            ├── 2025-12-10.parquet
+            └── ...
 
     Performance Notes:
         - Entire file loaded into memory for upload
+        - No chunked upload support in current Supabase client
         - Typical upload time: 2-5 seconds for 6MB file
-        - Network bandwidth is the primary bottleneck
 
-    Data Governance:
-        - Fixed snapshot replaced on re-initialization (idempotent)
-        - Audit trail maintained via table comment with dataset date
-        - Ongoing updates handled by data-pipeline project
+    Error Recovery:
+        - Existing files are removed before upload (replace strategy)
+        - Failed uploads leave no partial data
+        - Network errors are caught and logged
     """
-    storage_path = f"export_alimconfiance/{DATASET_DATE}.parquet"
+    alimconfiance_date = get_alimconfiance_date()
+    storage_path = f"export_alimconfiance/{alimconfiance_date}.parquet"
 
     print(f"\nUploading to Supabase Storage...")
     print(f"Target path: {BUCKET_NAME}/{storage_path}")
@@ -338,14 +356,14 @@ def upload_to_storage(supabase: Client, file_path: str) -> Optional[str]:
         with open(file_path, 'rb') as f:
             file_content = f.read()
 
-        # Implement replace strategy: remove existing snapshot if present
-        # This ensures idempotent uploads for the fixed snapshot
+        # Implement replace strategy: remove existing file if present
+        # This ensures idempotent uploads and prevents duplicates
         try:
             existing_files = supabase.storage.from_(BUCKET_NAME).list(
                 path='export_alimconfiance'
             )
             for file_info in existing_files:
-                if file_info['name'] == f"{DATASET_DATE}.parquet":
+                if file_info['name'] == f"{alimconfiance_date}.parquet":
                     print(f"Removing existing file: {storage_path}")
                     supabase.storage.from_(BUCKET_NAME).remove([storage_path])
                     break
@@ -373,11 +391,15 @@ def upload_to_storage(supabase: Client, file_path: str) -> Optional[str]:
 
 
 def create_database_table(db_uri: str, file_path: str) -> bool:
-    """Create and populate initial Alim'confiance inspection table.
+    """Create and populate initial Alim'confiance data table in bronze schema.
 
     This function handles the database loading phase of the initialization. It
-    reads the Parquet file, sanitizes column names for PostgreSQL compatibility,
-    creates a table in the bronze schema, and adds metadata for tracking.
+    reads the Parquet file into a pandas DataFrame, creates a table in the
+    bronze schema, and adds metadata for tracking.
+
+    The function implements a replace strategy, dropping any existing table
+    before creating a new one. This ensures clean initialization and supports
+    re-initialization if needed.
 
     Args:
         db_uri (str): PostgreSQL connection string in SQLAlchemy format.
@@ -390,11 +412,15 @@ def create_database_table(db_uri: str, file_path: str) -> bool:
     Side Effects:
         - Drops existing table if present (CASCADE)
         - Creates new table in bronze schema
-        - Sanitizes column names for SQL compatibility
         - Loads data from Parquet file
         - Creates table documentation
         - Prints progress messages to stdout
         - Prints error messages to stderr
+
+    Database Schema:
+        Table: bronze.export_alimconfiance
+        Columns: All columns from source Parquet
+        Table Comment: Includes dataset date and source information
 
     Example:
         >>> db_uri = "postgresql+psycopg://user:pass@localhost:5432/db"
@@ -403,9 +429,17 @@ def create_database_table(db_uri: str, file_path: str) -> bool:
         ...     print("Table created successfully")
 
     Performance Optimization:
-        - Batch inserts with 1000-row chunks
-        - Transaction management for atomicity
+        - Batch inserts with 1000-row chunks for stability
+        - Transaction management with engine.begin() for atomicity
+        - VACUUM ANALYZE recommended post-load (not automated)
+
+    Error Handling:
+        - Database connection errors caught and logged
+        - Transaction rollback on failure
+        - Detailed error messages for troubleshooting
     """
+    alimconfiance_date = get_alimconfiance_date()
+
     print(f"\nCreating database table...")
     print(f"Schema: {BRONZE_SCHEMA}")
     print(f"Table: {TABLE_NAME}")
@@ -443,10 +477,12 @@ def create_database_table(db_uri: str, file_path: str) -> bool:
             # Add comprehensive table documentation including dataset date
             conn.execute(text(f"""
                 COMMENT ON TABLE {BRONZE_SCHEMA}.{TABLE_NAME} IS
-                'Alim''confiance food safety inspection data - Initial load snapshot from {DATASET_DATE}.
+                'Alim''confiance food safety inspection data - Initial load.
+                 Dataset date: {alimconfiance_date}.
                  Contains hygiene inspection results for French food establishments.
-                 Source: Ministry of Agriculture via data.gouv.fr.
-                 Note: Using temporary snapshot during API maintenance. Updates handled by data-pipeline project.
+                 Source: Ministry of Agriculture via OpenDataSoft DGAL API.
+                 Geographic coverage: France (metropolitan and overseas).
+                 Updates handled by data-pipeline project.
                  Ratings: "Très satisfaisant", "Satisfaisant", "A améliorer", "A corriger de manière urgente".'
             """))
 
@@ -471,13 +507,12 @@ def main() -> None:
     """Orchestrate the Alim'confiance data initialization process.
 
     This function coordinates the three-phase initialization:
-    1. Download: Fetch inspection data from data.gouv.fr
+    1. Download: Fetch Alim'confiance data from OpenDataSoft API
     2. Storage: Store Parquet file in Supabase Storage
     3. Database: Load data into PostgreSQL bronze schema
 
-    This is a one-time initialization script using a fixed snapshot.
-    Ongoing updates will be handled by the data-pipeline project
-    once the official API is restored.
+    This is a one-time initialization script. Ongoing updates are
+    handled by the data-pipeline project using Apache Airflow.
 
     Exit Codes:
         0: Success - All phases completed successfully
@@ -498,11 +533,9 @@ def main() -> None:
         Alim'confiance Data Import
         ============================================================
         Loading environment configuration...
-        Downloading Alim'confiance temporary dataset...
-        Dataset date: 2025-05-06 (fixed snapshot during maintenance)
-        Source URL: https://object.files.data.gouv.fr/hydra-parquet/hydra-parquet/fdfabe62-a581-41a1-998f-73fc53da3398.parquet
-        Progress: 100.0% (5,870,183 / 5,870,183 bytes)
-        ✓ Downloaded 5,870,183 bytes to /tmp/export_alimconfiance-2025-05-06.parquet
+        Downloading Alim'confiance dataset (dated: 2025-12-09)...
+        Source URL: https://dgal.opendatasoft.com/api/explore/v2.1/catalog/datasets/export_alimconfiance/exports/parquet?lang=fr&timezone=Europe%2FBerlin
+        ✓ Downloaded 6,117,695 bytes to /tmp/export_alimconfiance-2025-12-09.parquet
         ...
         ✓ Alim'confiance data import completed successfully!
         ============================================================
@@ -550,13 +583,11 @@ def main() -> None:
             print("✗ Failed to create database table", file=sys.stderr)
             sys.exit(1)
 
-        # Display success summary with important metadata
+        # Display success summary
         print("\n" + "=" * 60)
         print("✓ Alim'confiance data import completed successfully!")
         print(f"  Storage: {BUCKET_NAME}/{storage_path}")
         print(f"  Table: {BRONZE_SCHEMA}.{TABLE_NAME}")
-        print(f"  Snapshot date: {DATASET_DATE}")
-        print("  Note: Using temporary snapshot during maintenance period")
         print("=" * 60)
 
     finally:

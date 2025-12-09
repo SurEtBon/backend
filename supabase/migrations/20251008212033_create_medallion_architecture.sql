@@ -7,8 +7,8 @@
 --              This is a one-time initialization migration executed during backend setup.
 --
 -- Author:      Jonathan About
--- Date:        2025-10-20
--- Version:     0.0.1
+-- Date:        2025-12-09
+-- Version:     0.0.2
 -- Since:       2025-10-20
 --
 -- Initialization Context:
@@ -20,7 +20,7 @@
 --
 -- Data Sources (Initial Load):
 --   - OpenStreetMap France: Latest snapshot at initialization (~165K rows)
---   - Alim'confiance: Fixed snapshot from 2025-05-06 (~80K rows)
+--   - Alim'confiance: Latest snapshot at initialization (~80K rows)
 --   Note: Regular updates handled by data-pipeline project
 --
 -- Technical Design:

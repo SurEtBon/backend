@@ -87,7 +87,6 @@
 #   - Consider running during off-peak hours
 #
 # Known Limitations:
-#   - Alim'confiance using fixed snapshot during API maintenance
 #   - One-time initialization only (updates via data-pipeline project)
 #   - Full data load (no incremental initialization)
 #   - Single-threaded execution (sequential operations)
@@ -604,7 +603,7 @@ This script performs the following one-time initialization operations:
      - API response tables: Google Places, Tripadvisor Location Search/Details
      - PostgreSQL extensions: PostGIS, fuzzystrmatch, GeoHash functions
   4. Imports initial OpenStreetMap France food service data
-  5. Imports initial Alim'confiance dataset (snapshot: 2025-05-06)
+  5. Imports initial Alim'confiance data
 
 Note: Ongoing data updates are handled by the data-pipeline project.
 
